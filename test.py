@@ -2,8 +2,6 @@
 # -*- coding: utf-8 -*-
 import audioop
 import collections
-import contextlib
-import io
 import math
 import re
 import sounddevice as sd
@@ -229,20 +227,17 @@ def main():
     
 if __name__ == "__main__":
     print("Devices:")
-    # redirect stderr to a buffer so we don't see the error messages
-    sys.stderr = io.TextIOWrapper(io.BytesIO(), sys.stderr.encoding)
-    with io.StringIO() as buf, contextlib.redirect_stderr(buf):
-        for device in sd.query_devices():
-            try:
-                if device['max_input_channels'] > 0:
-                    sd.check_input_settings(
-                        device=device['index'],
-                        channels=1,
-                        dtype="int16",
-                        samplerate=16000
-                    )
-                    print(f"\t{device['name']} is OK")
-            except sd.PortAudioError as e:
-                print(f"\t{device['name']} failed")
-                pass
+    for device in sd.query_devices():
+        try:
+            if device['max_input_channels'] > 0:
+                sd.check_input_settings(
+                    device=device['index'],
+                    channels=1,
+                    dtype="int16",
+                    samplerate=16000
+                )
+                print(f"\t{device['name']} is OK")
+        except sd.PortAudioError as e:
+            print(f"\t{device['name']} is not compatible")
+            pass
     main()

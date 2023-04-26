@@ -2,15 +2,26 @@
 # -*- coding: utf-8 -*-
 import audioop
 import collections
+import contextlib
+import json
 import math
+import os
 import re
 import sounddevice as sd
+import soundfile as sf
+import subprocess
+import tempfile
+import threading
+import wave
 import webrtcvad
 import sys
+from datetime import datetime
+from vosk import Model, KaldiRecognizer
 
 
 DISPLAYWIDTH = 80
 VAD_AGGRESSIVENESS = 3
+VOSK_MODEL = os.path.expanduser("~/VOSK/vosk-model-en-us-0.22-lgraph")
 
 
 def println(string, scroll=False):
@@ -60,18 +71,34 @@ def mic_volume(*args, **kwargs):
     println("".join(feedback))
 
 
+# Context enabled open so we don't forget to close the file handle
+# when hiding system stderr messages.
+class hide_stderr:
+    def __enter__(self):
+        self.fd = os.open('/dev/null', os.O_WRONLY)
+        self.std_err = os.dup(2)
+        os.dup2(self.fd, 2)
+        return self.fd
+
+    def __exit__(self, *args, **kwargs):
+        os.dup2(self.std_err, 2)
+        os.close(self.fd)
+        return True
+
+
 class TestVAD:
     def __init__(self):
         # The WebRTC VAD only accepts 16-bit mono PCM audio, sampled at
         # 8000, 16000, 32000 or 48000 Hz. A frame must be either 10, 20,
         # or 30 ms in duration:
+        self.input_bits = 16
         self.input_samplerate = 16000
         self.input_channels = 1
         self.input_length = 0.03
         self.input_chunksize = int(self.input_samplerate * self.input_channels * self.input_length)
         self.distribution = {}
         self._timeout_frames = 10 # frames before change in state
-        self.frames = collections.deque([], 30) # frame buffer
+        self.frames = collections.deque([], maxlen=30) # frame buffer
         self.recording_frames = []
         self._vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
         self._minimum_capture_frames = 30 # minimum number of frames to capture
@@ -80,6 +107,13 @@ class TestVAD:
         self.recording = False
         self._maxsnr = None
         self._minsnr = None
+        self.recordings_queue = collections.deque([], maxlen=10)
+        self.model = Model(VOSK_MODEL, 16000)
+        self.rec = KaldiRecognizer(self.model, 16000)
+        self.stt_thread = None
+        self.Continue = True
+        self.say_queue = collections.deque([], maxlen=10)
+        self.tts_thread = None
 
     def listen(self):
         print(f"chunksize = {self.input_chunksize}")
@@ -91,7 +125,7 @@ class TestVAD:
             samplerate=self.input_samplerate,
             callback=self.audio_callback
         ):
-            while True:
+            while self.Continue:
                 sd.sleep(30)
 
     def audio_callback(self, indata, frames, time, status):
@@ -105,43 +139,105 @@ class TestVAD:
             if(voice_detected):
                 # Voice activity detected, start recording and use
                 # the last 10 frames to start
-                println(
-                    "Started recording",
-                    scroll=True
-                )
+                # println(
+                #     "Started recording",
+                #     scroll=True
+                # )
                 self.recording = True
                 # Include the previous 10 frames in the recording.
-                self.recording_frames = list(self.frames)[-self._timeout_frames:]
+                *frames, = self.frames
+                self.recording_frames = frames[-self._timeout_frames:]
                 self.last_voice_frame = len(self.recording_frames)
         else:
             # We're recording
             self.recording_frames.append(frame)
             if(voice_detected):
                 self.last_voice_frame = len(self.recording_frames)
-            if(self.last_voice_frame < len(self.recording_frames) - self._timeout_frames):
+            if(self.last_voice_frame < (len(self.recording_frames) - self._timeout_frames*2)):
                 # We have waited past the timeout number of frames
                 # so we believe the speaker has finished speaking.
-                if(len(self.recording_frames) < self._minimum_capture_frames):
-                    println(
-                        " ".join([
-                            "Recorded {:.2f} seconds, less than threshold",
-                            "of {:.2f} seconds. Discarding"
-                        ]).format(
-                            len(self.recording_frames) * self.input_length,
-                            self._minimum_capture_frames * self.input_length
-                        ),
-                        scroll=True
-                    )
-                else:
-                    println(
-                        "Recorded {:.2f} seconds".format(
-                            len(self.recording_frames) * self.input_length
-                        ),
-                        scroll=True
-                    )
+                if(len(self.recording_frames) > self._minimum_capture_frames):
+                    # println(
+                    #     "Recorded {:.2f} seconds".format(
+                    #         len(self.recording_frames) * self.input_length
+                    #     ),
+                    #     scroll=True
+                    # )
+                    # put the audio in a queue and call the stt engine
+                    self.recordings_queue.appendleft(self.recording_frames)
+                    # println(f"Adding {len(self.recording_frames)} frames to queue", scroll=True)
+                    if not (hasattr(self, "stt_thread") and hasattr(self.stt_thread, "is_alive") and self.stt_thread.is_alive()):
+                        # start the thread
+                        self.stt_thread = threading.Thread(
+                            target=self.stt
+                        )
+                        self.stt_thread.start()
+                self.frames.clear()
                 self.recording = False
                 self.recording_frames = []
                 self.last_voice_frame = 0
+
+    @contextlib.contextmanager
+    def _write_frames_to_file(self, frames):
+        with tempfile.NamedTemporaryFile(
+            mode='w+b',
+            suffix=".wav",
+            prefix=datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        ) as f:
+            wav_fp = wave.open(f, 'wb')
+            wav_fp.setnchannels(self.input_channels)
+            wav_fp.setsampwidth(int(self.input_bits // 8))
+            wav_fp.setframerate(self.input_samplerate)
+            fragment = b''.join(frames)
+            wav_fp.writeframes(fragment)
+            wav_fp.close()
+            f.seek(0)
+            yield f
+
+    def stt(self):
+        while True:
+            try:
+                audio = self.recordings_queue.pop()
+                # println(f"Popped {len(audio)} frames from queue", scroll=True)
+                # println(f"type: {type(audio)}", scroll=True)
+                with self._write_frames_to_file(audio) as f:
+                    f.seek(44)
+                    data = f.read()
+                self.rec.AcceptWaveform(data)
+                res = json.loads(self.rec.FinalResult())
+                transcription = res['text']
+                println(f"{f.name} you said: {transcription}", scroll=True)
+                if "shut down" in transcription:
+                    self.Continue = False
+                if transcription.startswith("say "):
+                    # start a speak thread
+                    self.say_queue.appendleft("here is what you said to say")
+                    self.say_queue.appendleft(transcription[4:])
+                    if not (hasattr(self, "tts_thread") and hasattr(self.tts_thread, "is_alive") and self.tts_thread.is_alive()):
+                        self.tts_thread = threading.Thread(
+                            target=self.say,
+                            args=('slt',)
+                        )
+                        self.tts_thread.start()
+            except IndexError:
+                break
+
+    def say(self, voice="slt"):
+        while True:
+            try:
+                phrase = self.say_queue.pop()
+                cmd = ['flite']
+                cmd.extend(['-voice', voice])
+                cmd.extend(['-t', phrase])
+                with tempfile.NamedTemporaryFile(mode="w+b", suffix='.wav') as f:
+                    cmd.append(f.name)
+                    subprocess.call(cmd)
+                    data, sr = sf.read(f)
+                with hide_stderr():
+                    sd.play(data, samplerate=sr)
+                    sd.wait()
+            except IndexError:
+                break
 
     def voice_detected(self, indata):
         rms = audioop.rms(indata, 2)

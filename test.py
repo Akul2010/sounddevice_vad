@@ -206,7 +206,7 @@ class TestVAD:
                 self.rec.AcceptWaveform(data)
                 res = json.loads(self.rec.FinalResult())
                 transcription = res['text']
-                println(f"{f.name} you said: {transcription}", scroll=True)
+                println(f"<< {transcription}", scroll=True)
                 if "shut down" in transcription:
                     self.Continue = False
                 if transcription.startswith("say "):
@@ -226,6 +226,7 @@ class TestVAD:
         while True:
             try:
                 phrase = self.say_queue.pop()
+                println(f">> {phrase}", scroll=True)
                 cmd = ['flite']
                 cmd.extend(['-voice', voice])
                 cmd.extend(['-t', phrase])

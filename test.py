@@ -3,19 +3,25 @@
 import audioop
 import collections
 import contextlib
+import functools
 import json
 import math
 import os
+import pathlib
 import re
+import requests
+import shutil
 import sounddevice as sd
 import soundfile as sf
 import subprocess
+import sys
 import tempfile
 import threading
 import wave
 import webrtcvad
-import sys
+import zipfile
 from datetime import datetime
+from tqdm.auto import tqdm
 from vosk import Model, KaldiRecognizer
 
 
@@ -70,6 +76,59 @@ def mic_volume(*args, **kwargs):
         feedback[int(displaywidth * ((threshold - minsnr) / snrrange))] = 't'
     println("".join(feedback))
 
+def download(url, dest):
+    
+    path = pathlib.Path(dest).expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if os.path.isfile(dest):
+        # check if the size is correct
+        local_file_size = os.path.getsize(dest)
+        r = requests.get(url, stream=True, allow_redirects=True)
+        remote_file_size = int(r.headers.get('Content-Length', 0))
+        r.close()
+        if local_file_size < remote_file_size:
+            # try to resume download
+            resume_header = {'Range': f'bytes={local_file_size}-{remote_file_size}'}
+            r = requests.get(
+                url,
+                headers=resume_header,
+                stream=True,
+                allow_redirects=True
+            )
+            desc = "(Unknown total file size)" if remote_file_size == 0 else ""
+            if r.status_code != 206: # Partial Content
+                r.raise_for_status()
+                raise RuntimeError(f"Request to {url} returned status code {r.status_code}")
+            r.raw.read = functools.partial(r.raw.read, decode_content=True)
+            with tqdm.wrapattr(
+                r.raw,
+                "read",
+                total=remote_file_size,
+                initial=local_file_size,
+                desc=desc
+            ) as r_raw:
+                with path.open("ab") as f:
+                    shutil.copyfileobj(r_raw, f)
+    else:
+        r = requests.get(
+            url,
+            stream=True,
+            allow_redirects=True
+        )
+        desc = "(Unknown total file size)" if remote_file_size == 0 else ""
+        if r.status_code != 200: # Okay
+            r.raise_for_status()
+            raise RuntimeError(f"Request to {url} returned status code {r.status_code}")
+        r.raw.read = functools.partial(r.raw.read, decode_content=True)
+        with tqdm.wrapattr(
+            r.raw,
+            "read",
+            total=remote_file_size,
+            desc=desc
+        ) as r_raw:
+            with path.open("wb") as f:
+                shutil.copyfileobj(r_raw, f)
 
 # Context enabled open so we don't forget to close the file handle
 # when hiding system stderr messages.
@@ -88,6 +147,8 @@ class hide_stderr:
 
 class TestVAD:
     def __init__(self):
+        self.Continue = True
+        # sounddevice input device
         # The WebRTC VAD only accepts 16-bit mono PCM audio, sampled at
         # 8000, 16000, 32000 or 48000 Hz. A frame must be either 10, 20,
         # or 30 ms in duration:
@@ -96,6 +157,7 @@ class TestVAD:
         self.input_channels = 1
         self.input_length = 0.03
         self.input_chunksize = int(self.input_samplerate * self.input_channels * self.input_length)
+        # VAD
         self.distribution = {}
         self._timeout_frames = 10 # frames before change in state
         self.frames = collections.deque([], maxlen=30) # frame buffer
@@ -107,13 +169,23 @@ class TestVAD:
         self.recording = False
         self._maxsnr = None
         self._minsnr = None
+        # STT
         self.recordings_queue = collections.deque([], maxlen=10)
-        self.model = Model(VOSK_MODEL, 16000)
-        self.rec = KaldiRecognizer(self.model, 16000)
         self.stt_thread = None
-        self.Continue = True
+        # TTS
         self.say_queue = collections.deque([], maxlen=10)
         self.tts_thread = None
+        # Make sure that the vosk model exists and download it if not
+        if not os.path.isdir(VOSK_MODEL):
+            zip_file = f"{VOSK_MODEL}.zip"
+            print("Downloading vosk model")
+            download('https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip', zip_file)
+            print("Unzipping model file")
+            vosk_working_folder = pathlib.Path(VOSK_MODEL).parent
+            with zipfile.ZipFile(zip_file, 'r') as z:
+                z.extractall(vosk_working_folder)
+        self.model = Model(VOSK_MODEL, 16000)
+        self.rec = KaldiRecognizer(self.model, 16000)
 
     def listen(self):
         print(f"chunksize = {self.input_chunksize}")
@@ -127,6 +199,11 @@ class TestVAD:
         ):
             while self.Continue:
                 sd.sleep(30)
+        if (hasattr(self, "stt_thread") and hasattr(self.stt_thread, "is_alive") and self.stt_thread.is_alive()):
+            self.stt_thread.join()
+        if (hasattr(self, "tts_thread") and hasattr(self.tts_thread, "is_alive") and self.tts_thread.is_alive()):
+            self.tts_thread.join()
+        print()
 
     def audio_callback(self, indata, frames, time, status):
         """This is called (from a separate thread) for each audio block."""

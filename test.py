@@ -8,7 +8,6 @@ import json
 import math
 import os
 import pathlib
-import re
 import requests
 import shutil
 import sounddevice as sd

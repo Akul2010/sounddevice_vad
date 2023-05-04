@@ -23,6 +23,7 @@ import zipfile
 from datetime import datetime
 from tqdm.auto import tqdm
 from vosk import Model, KaldiRecognizer
+from pathlib import Path
 
 
 DISPLAYWIDTH = 80
@@ -176,7 +177,7 @@ class TestVAD:
         self.say_queue = collections.deque([], maxlen=10)
         self.tts_thread = None
         # Make sure that the vosk model exists and download it if not
-        if not os.path.isdir(VOSK_MODEL):
+        if not Path(VOSK_MODEL).is_dir():
             zip_file = f"{VOSK_MODEL}.zip"
             print("Downloading vosk model")
             download('https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip', zip_file)

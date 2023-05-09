@@ -283,7 +283,7 @@ class TestVAD:
                 res = json.loads(self.rec.FinalResult())
                 transcription = res['text']
                 println(f"<< {transcription}", scroll=True)
-                if "shut down" in transcription:
+                if any(map(lambda v: v in transcription, ["shut down", "shutdown", "turn off", "quit"])):
                     self.Continue = False
                 if transcription.startswith("say "):
                     # start a speak thread

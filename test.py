@@ -116,6 +116,7 @@ def download(url, dest):
             stream=True,
             allow_redirects=True
         )
+        remote_file_size = int(r.headers.get('Content-Length', 0))
         desc = "(Unknown total file size)" if remote_file_size == 0 else ""
         if r.status_code != 200: # Okay
             r.raise_for_status()

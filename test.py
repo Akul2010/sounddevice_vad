@@ -281,8 +281,9 @@ class TestVAD:
                     data = f.read()
                 self.rec.AcceptWaveform(data)
                 res = json.loads(self.rec.FinalResult())
-                transcription = res['text']
-                println(f"<< {transcription}", scroll=True)
+                transcription = res['text'].strip()
+                if len(transcription) > 0:
+                    println(f"<< {transcription}", scroll=True)
                 if any(map(lambda v: v in transcription, ["shut down", "shutdown", "turn off", "quit"])):
                     self.Continue = False
                 if transcription.startswith("say "):

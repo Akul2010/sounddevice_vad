@@ -81,12 +81,13 @@ def download(url, dest):
     path = pathlib.Path(dest).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     
+    r = requests.get(url, stream=True, allow_redirects=True)
+    remote_file_size = int(r.headers.get('Content-Length', 0))
+    r.close()
+    desc = "(Unknown total file size)" if remote_file_size == 0 else ""
     if os.path.isfile(dest):
         # check if the size is correct
         local_file_size = os.path.getsize(dest)
-        r = requests.get(url, stream=True, allow_redirects=True)
-        remote_file_size = int(r.headers.get('Content-Length', 0))
-        r.close()
         if local_file_size < remote_file_size:
             # try to resume download
             resume_header = {'Range': f'bytes={local_file_size}-{remote_file_size}'}
@@ -96,7 +97,6 @@ def download(url, dest):
                 stream=True,
                 allow_redirects=True
             )
-            desc = "(Unknown total file size)" if remote_file_size == 0 else ""
             if r.status_code != 206: # Partial Content
                 r.raise_for_status()
                 raise RuntimeError(f"Request to {url} returned status code {r.status_code}")
@@ -116,8 +116,6 @@ def download(url, dest):
             stream=True,
             allow_redirects=True
         )
-        remote_file_size = int(r.headers.get('Content-Length', 0))
-        desc = "(Unknown total file size)" if remote_file_size == 0 else ""
         if r.status_code != 200: # Okay
             r.raise_for_status()
             raise RuntimeError(f"Request to {url} returned status code {r.status_code}")

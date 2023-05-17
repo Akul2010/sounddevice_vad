@@ -10,3 +10,7 @@
 __pycache__/
 *.py[cod]
 
+# Temp files
+*.log
+Hello_there_echo.wav
+

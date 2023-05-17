@@ -17,12 +17,12 @@ test_file = "Hello_there.wav"
 def callback(indata, outdata, frames, time, status):
     if status:
         print(f"Status: {status}")
+    record_queue.put(indata.copy())
     try:
         outdata[:] = play_queue.get_nowait()
     except queue.Empty as e:
         print('Buffer is empty')
         raise sd.CallbackAbort from e
-    record_queue.put(indata)
     print(f"Outdata shape is {outdata.shape}")
 
 def main():

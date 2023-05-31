@@ -34,7 +34,7 @@ def main():
     print(f"audio data shape: {data.shape}")    
     l = data.shape[0]
     print(f"audio data shape: {data.shape}")    
-    length = 0.03
+    length = 0.15
     try:
         channels = data.shape[1]
     except IndexError:
@@ -48,7 +48,8 @@ def main():
     print(f"audio data shape: {data.shape}")
     l = data.shape[0]
     print(f"Adding {chunksize - l%chunksize}")
-    data = np.append(data, np.zeros(chunksize - l%chunksize, dtype='float32').reshape((chunksize - l%chunksize, 1))).reshape((l+chunksize - l%chunksize, channels))
+    data = np.append(data, np.zeros(chunksize * 3 - l%chunksize, dtype='float32').reshape((chunksize *3 - l%chunksize, 1))).reshape((l+chunksize * 3 - l%chunksize, channels))
+    # data = np.append(data, np.zeros(chunksize - l%chunksize, dtype='float32').reshape((chunksize - l%chunksize, 1))).reshape((l+chunksize - l%chunksize, channels))
     l = data.shape[0]
     print(f"audio data shape: {data.shape}")
     

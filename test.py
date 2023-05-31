@@ -196,6 +196,13 @@ class TestVAD:
             samplerate=self.input_samplerate,
             callback=self.audio_callback
         ):
+            print('This program is a demo of a full-duplex assistant that')
+            print('listens constantly, even when thinking or talking.')
+            print('It only understands two commands: say and quit.')
+            print('Telling the computer to "say something" will')
+            print('cause the computer to say "something".')
+            print('Telling the computer to "quit" will cause the program to exit.')
+
             while self.Continue:
                 sd.sleep(30)
         if (hasattr(self, "stt_thread") and hasattr(self.stt_thread, "is_alive") and self.stt_thread.is_alive()):
@@ -285,21 +292,25 @@ class TestVAD:
                 if len(transcription) > 0:
                     println(f"<< {transcription}", scroll=True)
                 if any(map(lambda v: v in transcription, ["shut down", "shutdown", "turn off", "quit"])):
+                    self.say("okay, quitting")
                     self.Continue = False
                 if transcription.startswith("say "):
                     # start a speak thread
-                    self.say_queue.appendleft("here is what you said to say")
-                    self.say_queue.appendleft(transcription[4:])
-                    if not (hasattr(self, "tts_thread") and hasattr(self.tts_thread, "is_alive") and self.tts_thread.is_alive()):
-                        self.tts_thread = threading.Thread(
-                            target=self.say,
-                            args=('slt',)
-                        )
-                        self.tts_thread.start()
+                    self.say("here is what you said to say")
+                    self.say(transcription[4:])
             except IndexError:
                 break
 
-    def say(self, voice="slt"):
+    def say(self, text):
+        self.say_queue.appendleft(text)
+        if not (hasattr(self, "tts_thread") and hasattr(self.tts_thread, "is_alive") and self.tts_thread.is_alive()):
+            self.tts_thread = threading.Thread(
+                target=self._say,
+                args=('slt',)
+            )
+            self.tts_thread.start()
+
+    def _say(self, voice="slt"):
         while True:
             try:
                 phrase = self.say_queue.pop()

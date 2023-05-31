@@ -13,4 +13,5 @@ __pycache__/
 # Temp files
 *.log
 Hello_there_echo.wav
-
+Hello_there_echo_trimmed.wav
+Hello_there_echo_trimmed_with_voice.wav
